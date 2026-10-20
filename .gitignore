@@ -1,0 +1,20 @@
+# dependencies / build output
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets - API keys live here; .env.example documents the names
+.env
+.env*.local
+
+# local data: SQLite DB holds broker session tokens + your holdings
+prisma/*.db
+prisma/*.db-journal
+
+# runtime logs
+*.log
+
+# per-machine Claude Code settings
+.claude/settings.local.json

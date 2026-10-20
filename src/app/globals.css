@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme colors are applied directly on <body> in layout.tsx (light +
+   dark variants) so they live in one place alongside the dark-mode
+   class toggle logic. Shared surface/control styles live here as
+   component classes so every page draws cards, chips and tables the
+   same way. */
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-slate-900/70;
+  }
+  .card-title {
+    @apply text-sm font-semibold text-slate-800 dark:text-slate-100;
+  }
+  .eyebrow {
+    @apply text-xs font-medium text-slate-500 dark:text-slate-400;
+  }
+  .page-title {
+    @apply text-2xl font-semibold tracking-tight text-slate-900 dark:text-white;
+  }
+  .page-subtitle {
+    @apply mt-1 text-sm text-slate-500 dark:text-slate-400;
+  }
+
+  /* Pill filters - Groww/TradingView style segmented chips. */
+  .chip {
+    @apply inline-flex items-center rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white;
+  }
+  .chip-active {
+    @apply border-slate-900 bg-slate-900 text-white hover:border-slate-900 hover:text-white dark:border-white dark:bg-white dark:text-slate-900 dark:hover:text-slate-900;
+  }
+
+  /* Data tables: header band, roomy rows, hairline dividers. Child
+     selectors sit in :where() so they stay at single-class specificity
+     and a utility on a cell (px-3, etc.) can still override them. */
+  .data-table {
+    @apply w-full text-sm;
+  }
+  .data-table :where(thead) {
+    @apply bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:bg-slate-800/40 dark:text-slate-400;
+  }
+  .data-table :where(th) {
+    @apply whitespace-nowrap px-4 py-2.5;
+  }
+  .data-table :where(td) {
+    @apply px-4 py-3;
+  }
+  .data-table :where(tbody tr) {
+    @apply border-t border-slate-100 transition-colors hover:bg-slate-50/80 dark:border-slate-800 dark:hover:bg-slate-800/40;
+  }
+}
+
+/* Ticker tape marquee - two copies of the list slide left by exactly one
+   copy's width, so the loop is seamless. */
+@keyframes ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.ticker-track {
+  animation: ticker-scroll 45s linear infinite;
+}
+.ticker:hover .ticker-track {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track {
+    animation: none;
+  }
+}

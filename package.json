@@ -1,0 +1,49 @@
+{
+  "name": "stock-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "prisma:migrate": "prisma migrate dev --name init",
+    "prisma:studio": "prisma studio",
+    "agent:backtest": "tsx src/agent/backtest/runBacktest.ts",
+    "agent:run": "tsx src/agent/runAgent.ts",
+    "agent:reset-kill-switch": "tsx src/agent/resetKillSwitch.ts",
+    "agent:status": "tsx src/agent/status.ts",
+    "test": "vitest run",
+    "agent:backtest-intraday": "tsx src/agent/backtest/runIntradayBacktest.ts",
+    "agent:run-intraday": "tsx src/agent/runIntraday.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.19.1",
+    "lucide-react": "^1.59.0",
+    "next": "^14.2.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.5",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.2.15",
+    "postcss": "^8.4.45",
+    "prisma": "^5.19.1",
+    "tailwindcss": "^3.4.10",
+    "tsx": "^4.23.15",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.9"
+  },
+  "allowScripts": {
+    "@prisma/client@5.22.0": true,
+    "@prisma/engines@5.22.0": true,
+    "prisma@5.22.0": true,
+    "unrs-resolver@1.12.2": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true
+  }
+}

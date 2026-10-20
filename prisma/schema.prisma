@@ -1,0 +1,140 @@
+// Prisma schema for the Stock Market Dashboard
+// Run `npm run prisma:migrate` after `npm install` to create dev.db
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// A single holding in your portfolio. One table covers all three asset
+// classes (assetClass discriminates) so portfolio-wide queries (total
+// value, allocation, P&L) stay a single query instead of three unioned
+// ones. Tradeoff: looser typing per asset class - worth discussing in
+// an interview as "single table inheritance" vs. separate tables.
+model Holding {
+  id          String   @id @default(cuid())
+  // "IN_STOCK" | "US_STOCK" | "CRYPTO"
+  assetClass  String
+  // Provider-specific symbol, e.g. "RELIANCE.NS", "AAPL", "bitcoin"
+  symbol      String
+  displayName String?
+  quantity    Float
+  avgBuyPrice Float
+  buyDate     DateTime
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([assetClass])
+}
+
+// Simple TTL cache for provider responses (quotes, movers, history) so
+// we don't hammer free/unofficial APIs on every page load. See
+// src/lib/cache/ttlCache.ts for the read/write helpers around this table.
+model QuoteCache {
+  key       String   @id
+  payload   String
+  fetchedAt DateTime @default(now())
+}
+
+// --- Trading agent (see TRADING_AGENT_DESIGN.md) ---
+// Deliberately separate from Holding/the dashboard portfolio: paper
+// trades are simulated by the agent, not real positions you own, and
+// must never be mistaken for or mixed into your actual portfolio.
+
+// One row per broker mode (currently just "PAPER"). Tracks simulated
+// cash so paperBroker.ts doesn't need to replay the full Order history
+// on every run to know the balance.
+model PaperAccount {
+  mode      String   @id
+  cash      Float
+  updatedAt DateTime @updatedAt
+}
+
+// One row per (mode, symbol) currently held in paper trading.
+model PaperPosition {
+  id          String   @id @default(cuid())
+  mode        String
+  symbol      String
+  assetClass  String
+  quantity    Float
+  avgBuyPrice Float
+  updatedAt   DateTime @updatedAt
+
+  @@unique([mode, symbol])
+}
+
+// Audit log of every order the agent actually attempted to place,
+// filled or rejected. A risk-manager block never reaches here - see
+// DecisionLog.blockReason for those.
+model Order {
+  id           String   @id @default(cuid())
+  mode         String // "PAPER" | "TESTNET" | "LIVE"
+  side         String // "BUY" | "SELL"
+  assetClass   String
+  symbol       String
+  quantity     Float
+  price        Float
+  status       String // "FILLED" | "REJECTED"
+  rejectReason String?
+  createdAt    DateTime @default(now())
+}
+
+// Singleton row per mode tracking today's risk counters + the kill
+// switch. Mirrors riskManager.ts's RiskState shape exactly - runAgent.ts
+// loads this into a RiskState before each pass and saves it back after,
+// since riskManager itself never touches Prisma directly (see the
+// comment at the top of riskManager.ts for why).
+model AgentState {
+  id                String   @id // e.g. "PAPER", "LIVE"
+  killSwitchActive  Boolean  @default(false)
+  killSwitchReason  String?
+  tradesToday       Int      @default(0)
+  realizedLossToday Float    @default(0)
+  lastResetDate     DateTime @default(now())
+}
+
+// Every decision the agent makes, whether or not it resulted in an
+// order - this is what you actually review during the paper-trading
+// weeks. `suggestion` is usually one of scoreHolding's four values, but
+// can also be "STOP_LOSS" for a forced protective sell that bypassed the
+// strategy entirely.
+model DecisionLog {
+  id          String   @id @default(cuid())
+  symbol      String
+  suggestion  String
+  reasons     String // JSON array of strings
+  executed    Boolean
+  blockReason String?
+  createdAt   DateTime @default(now())
+}
+
+// --- Kite Connect (read-only account link, see /kite) ---
+// Single row (id "default" - single-user dashboard). Kite access tokens
+// expire every trading day, not on a fixed TTL - there's no refresh
+// token for personal use, so this row is simply overwritten whenever
+// you re-login via /api/kite/callback. Scaffolding only until a real
+// Kite Connect app's credentials exist in .env - see README.
+model KiteSession {
+  id          String   @id
+  accessToken String
+  kiteUserId  String
+  fetchedAt   DateTime @default(now())
+}
+
+// --- Other brokers (read-only, see src/lib/brokers) ---
+// One row per broker ("angel", ...), overwritten on each daily login.
+// Kite keeps its own KiteSession table above (predates this). Only the
+// session token is stored - never the MPIN / TOTP used to obtain it.
+model BrokerSession {
+  broker      String   @id
+  accessToken String
+  userId      String
+  userName    String?
+  fetchedAt   DateTime @default(now())
+  expiresAt   DateTime
+}
