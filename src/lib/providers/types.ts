@@ -21,6 +21,8 @@ export interface HistoryPoint {
   // (ADX) return null when these are missing rather than guessing.
   high?: number;
   low?: number;
+  // Optional: Yahoo only. Used by the volume profile (src/lib/levels).
+  volume?: number;
 }
 
 export interface SearchResult {

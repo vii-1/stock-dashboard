@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { Quote } from "@/lib/providers/types";
 import MoversTable from "@/components/MoversTable";
+import type { DetailMarket } from "@/lib/fundamentals/paths";
 
 export interface MoversTab {
   key: string;
@@ -17,11 +18,13 @@ export default function MoversTabs({
   tabs,
   sparks,
   details,
+  market,
   footnote,
 }: {
   tabs: MoversTab[];
   sparks?: Record<string, number[]>;
   details?: "expand" | "link";
+  market?: DetailMarket;
   footnote?: string;
 }) {
   const [active, setActive] = useState(tabs[0]?.key);
@@ -43,7 +46,7 @@ export default function MoversTabs({
         ))}
         {footnote && <span className="ml-auto text-xs text-slate-400 dark:text-slate-500">{footnote}</span>}
       </div>
-      <div role="tabpanel">{current && <MoversTable quotes={current.quotes} sparks={sparks} details={details} />}</div>
+      <div role="tabpanel">{current && <MoversTable quotes={current.quotes} sparks={sparks} details={details} market={market} />}</div>
     </section>
   );
 }

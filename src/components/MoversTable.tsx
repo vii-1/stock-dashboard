@@ -9,26 +9,29 @@ import SymbolAvatar from "@/components/ui/SymbolAvatar";
 import ChangeText from "@/components/ui/ChangeText";
 import Sparkline from "@/components/ui/Sparkline";
 import StockDetailPanel from "@/components/stock/StockDetailPanel";
-
-const isIndian = (symbol: string) => /\.(NS|BO)$/.test(symbol);
+import CryptoDetailPanel from "@/components/stock/CryptoDetailPanel";
+import { detailPath, type DetailMarket } from "@/lib/fundamentals/paths";
 
 // Groww-style movers list: logo tile, name over ticker, optional trend
 // sparkline, price stacked over change. `compact` drops the sparkline
 // column and tightens rows for the dashboard's three-up cards.
 //
-// `details` (Indian stocks only, for now):
-//   "expand" - clicking a row opens the Screener-style panel in place
-//   "link"   - the row links to the full stock page (narrow layouts)
+// `details` (needs `market` so rows open the right view):
+//   "expand" - clicking a row opens the fundamentals panel in place
+//              (Screener-style for stocks, coin stats for crypto)
+//   "link"   - the row links to the full page (narrow layouts)
 export default function MoversTable({
   quotes,
   sparks,
   compact = false,
   details,
+  market,
 }: {
   quotes: Quote[];
   sparks?: Record<string, number[]>;
   compact?: boolean;
   details?: "expand" | "link";
+  market?: DetailMarket;
 }) {
   const [open, setOpen] = useState<string | null>(null);
 
@@ -41,7 +44,7 @@ export default function MoversTable({
       {quotes.map((q, i) => {
         const { ticker, name } = displaySymbol(q);
         const spark = sparks?.[q.symbol];
-        const mode = details && isIndian(q.symbol) ? details : null;
+        const mode = details && market ? details : null;
         const expanded = mode === "expand" && open === q.symbol;
 
         const content = (
@@ -93,7 +96,7 @@ export default function MoversTable({
                   {content}
                 </button>
               ) : mode === "link" ? (
-                <Link href={`/stocks/india/${encodeURIComponent(q.symbol)}`} className={rowClass}>
+                <Link href={detailPath(market!, q.symbol)} className={rowClass}>
                   {content}
                 </Link>
               ) : (
@@ -101,7 +104,7 @@ export default function MoversTable({
               )}
               {expanded && (
                 <div id={`detail-${q.symbol}`} className="border-t border-slate-100 bg-slate-50/60 px-3 py-4 dark:border-slate-800 dark:bg-slate-950/40 sm:px-5">
-                  <StockDetailPanel symbol={q.symbol} />
+                  {market === "crypto" ? <CryptoDetailPanel id={q.symbol} /> : <StockDetailPanel symbol={q.symbol} />}
                 </div>
               )}
             </li>

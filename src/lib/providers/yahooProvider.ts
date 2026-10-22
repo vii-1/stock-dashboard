@@ -151,6 +151,7 @@ function createYahooProvider(market: Market): MarketDataProvider {
         const closes: (number | null)[] = quote.close ?? [];
         const highs: (number | null)[] = quote.high ?? [];
         const lows: (number | null)[] = quote.low ?? [];
+        const volumes: (number | null)[] = quote.volume ?? [];
 
         return timestamps
           .map((t, i): HistoryPoint | null => {
@@ -159,6 +160,7 @@ function createYahooProvider(market: Market): MarketDataProvider {
             const point: HistoryPoint = { date: new Date(t * 1000).toISOString().slice(0, 10), close };
             if (highs[i] != null) point.high = highs[i]!;
             if (lows[i] != null) point.low = lows[i]!;
+            if (volumes[i] != null) point.volume = volumes[i]!;
             return point;
           })
           .filter((point): point is HistoryPoint => point !== null);

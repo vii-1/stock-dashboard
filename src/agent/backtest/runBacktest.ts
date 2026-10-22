@@ -94,6 +94,8 @@ async function main() {
       position,
       portfolioValue,
       cash,
+      wholeUnits: assetClass === "IN_STOCK",
+      costPct: TRANSACTION_COST_PCT,
     });
 
     if (decision.action === "BUY" && decision.quantity > 0) {

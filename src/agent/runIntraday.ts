@@ -9,6 +9,9 @@
 // Backtest it first: npm run agent:backtest-intraday.
 //
 // Order of operations each pass:
+// Longs (BUY -> SELL) and same-day shorts (SHORT -> COVER), see
+// intradayStrategy.ts.
+//
 //   1. Exits for every open position (stop-loss / target / reversal /
 //      15:15 square-off). Exits are NEVER blocked - not by trade-count
 //      caps, not even by the kill switch - so nothing is carried
@@ -18,7 +21,8 @@
 import { prisma } from "@/lib/prisma";
 import { getIntradayBars, NIFTY_WATCHLIST, type IntradayBar } from "@/lib/providers/yahooProvider";
 import { createPaperBroker, INTRADAY_COST_PCT } from "./broker/paperBroker";
-import { intradaySignal } from "./strategy/intradayStrategy";
+import { positionValue } from "./broker/types";
+import { INTRADAY_PARAMS, intradaySignal, type MarketContext } from "./strategy/intradayStrategy";
 import {
   checkTrade,
   INTRADAY_RISK_LIMITS,
@@ -33,6 +37,7 @@ const MODE = "PAPER_INTRADAY";
 const broker = createPaperBroker(MODE, INTRADAY_COST_PCT);
 // Latest completed bar older than this = Yahoo is lagging; don't act on it.
 const MAX_BAR_AGE_MINUTES = 12;
+const NIFTY_INDEX = "^NSEI";
 
 async function loadState(): Promise<{ risk: RiskState; lastResetDate: Date }> {
   const row = await prisma.agentState.upsert({ where: { id: MODE }, create: { id: MODE }, update: {} });
@@ -52,7 +57,7 @@ async function saveState(risk: RiskState, lastResetDate: Date) {
 }
 
 async function record(params: {
-  side: "BUY" | "SELL";
+  side: "BUY" | "SELL" | "SHORT" | "COVER";
   symbol: string;
   quantity: number;
   price: number;
@@ -118,26 +123,40 @@ async function main() {
     })
   );
 
+  // Market filter input. Missing/stale index data = no new entries
+  // (the strategy treats an absent context as "can't judge"); exits
+  // don't need it.
+  let market: MarketContext | undefined;
+  try {
+    const index = await getIntradayBars(NIFTY_INDEX, "5d");
+    const last = index[index.length - 1];
+    if (last && Date.now() / 1000 - (last.time + 300) <= MAX_BAR_AGE_MINUTES * 60) market = { index };
+    else console.log(`${NIFTY_INDEX}: latest bar is stale or missing - no new entries this pass.`);
+  } catch (err) {
+    console.error(`${NIFTY_INDEX}: failed to fetch bars - no new entries this pass:`, err instanceof Error ? err.message : err);
+  }
+
   const cash0 = await broker.getCashBalance();
   const lastClose = (symbol: string) => barsBySymbol.get(symbol)?.at(-1)?.close;
   const portfolioValue = () =>
-    cash0 + positions.reduce((s, p) => s + p.quantity * (lastClose(p.symbol) ?? p.avgBuyPrice), 0);
+    cash0 + positions.reduce((s, p) => s + positionValue(p, lastClose(p.symbol) ?? p.avgBuyPrice), 0);
 
   // --- 1. Exits ---
   for (const position of positions) {
     const bars = barsBySymbol.get(position.symbol);
     if (!bars) continue;
     const price = bars[bars.length - 1].close;
-    const signal = intradaySignal(bars, price, position);
-    if (signal.action !== "SELL") continue;
+    const signal = intradaySignal(bars, price, position, INTRADAY_PARAMS, market);
+    if (signal.action !== "SELL" && signal.action !== "COVER") continue;
+    const side = signal.action;
 
-    const result = await broker.placeOrder({ symbol: position.symbol, assetClass: "IN_STOCK", side: "SELL", quantity: position.quantity, price });
-    await record({ side: "SELL", symbol: position.symbol, quantity: position.quantity, price, status: result.status, rejectReason: result.rejectReason, reasons: signal.reasons });
+    const result = await broker.placeOrder({ symbol: position.symbol, assetClass: "IN_STOCK", side, quantity: position.quantity, price });
+    await record({ side, symbol: position.symbol, quantity: position.quantity, price, status: result.status, rejectReason: result.rejectReason, reasons: signal.reasons });
     if (result.status === "FILLED") {
-      console.log(`${position.symbol}: SELL ${position.quantity} @ ${price.toFixed(2)} (P&L ${result.realizedPnl?.toFixed(2)}) - ${signal.reasons[0]}`);
+      console.log(`${position.symbol}: ${side} ${position.quantity} @ ${price.toFixed(2)} (P&L ${result.realizedPnl?.toFixed(2)}) - ${signal.reasons[0]}`);
       risk = recordTrade(risk, result.realizedPnl ?? 0, INTRADAY_RISK_LIMITS, portfolioValue());
     } else {
-      console.log(`${position.symbol}: SELL REJECTED - ${result.rejectReason}`);
+      console.log(`${position.symbol}: ${side} REJECTED - ${result.rejectReason}`);
     }
   }
 
@@ -150,38 +169,45 @@ async function main() {
       const bars = barsBySymbol.get(symbol);
       if (!bars || held.has(symbol)) continue;
       const price = bars[bars.length - 1].close;
-      const signal = intradaySignal(bars, price, null);
-      if (signal.action !== "BUY") continue;
+      const signal = intradaySignal(bars, price, null, INTRADAY_PARAMS, market);
+      if (signal.action !== "BUY" && signal.action !== "SHORT") continue;
+      const side = signal.action;
+      if (held.size >= INTRADAY_PARAMS.maxOpenPositions) {
+        console.log(`${symbol}: ${side} signal skipped - already at ${INTRADAY_PARAMS.maxOpenPositions} open positions.`);
+        continue;
+      }
 
       const cash = await broker.getCashBalance();
       const value = portfolioValue();
       const budget = Math.min(value * (INTRADAY_RISK_LIMITS.maxPositionPct / 100), cash);
       const quantity = Math.floor(budget / (price * (1 + INTRADAY_COST_PCT / 100)));
       if (quantity < 1) {
-        console.log(`${symbol}: BUY signal but not enough cash for one share.`);
+        console.log(`${symbol}: ${side} signal but not enough cash for one share.`);
         continue;
       }
+      // A short ties up the same capital as a long - same size caps.
       const check = checkTrade({ action: "BUY", quantity, price, portfolioValue: value, existingPositionValue: 0 }, risk, INTRADAY_RISK_LIMITS);
       if (!check.allowed) {
-        console.log(`${symbol}: BUY BLOCKED - ${check.blockReason}`);
-        await record({ side: "BUY", symbol, quantity, price, status: "REJECTED", rejectReason: check.blockReason ?? undefined, reasons: signal.reasons });
+        console.log(`${symbol}: ${side} BLOCKED - ${check.blockReason}`);
+        await record({ side, symbol, quantity, price, status: "REJECTED", rejectReason: check.blockReason ?? undefined, reasons: signal.reasons });
         continue;
       }
 
-      const result = await broker.placeOrder({ symbol, assetClass: "IN_STOCK", side: "BUY", quantity, price });
-      await record({ side: "BUY", symbol, quantity, price, status: result.status, rejectReason: result.rejectReason, reasons: signal.reasons });
+      const result = await broker.placeOrder({ symbol, assetClass: "IN_STOCK", side, quantity, price });
+      await record({ side, symbol, quantity, price, status: result.status, rejectReason: result.rejectReason, reasons: signal.reasons });
       if (result.status === "FILLED") {
-        console.log(`${symbol}: BUY ${quantity} @ ${price.toFixed(2)} - ${signal.reasons.join(" ")}`);
+        console.log(`${symbol}: ${side} ${quantity} @ ${price.toFixed(2)} - ${signal.reasons.join(" ")}`);
+        held.add(symbol);
         risk = recordTrade(risk, 0, INTRADAY_RISK_LIMITS, value);
       } else {
-        console.log(`${symbol}: BUY REJECTED - ${result.rejectReason}`);
+        console.log(`${symbol}: ${side} REJECTED - ${result.rejectReason}`);
       }
     }
   }
 
   await saveState(risk, lastResetDate);
   const open = await broker.getPositions();
-  console.log(`Pass complete. Cash ${(await broker.getCashBalance()).toFixed(2)}, open positions: ${open.length ? open.map((p) => `${p.symbol}x${p.quantity}`).join(", ") : "none"}.`);
+  console.log(`Pass complete. Cash ${(await broker.getCashBalance()).toFixed(2)}, open positions: ${open.length ? open.map((p) => `${p.symbol}x${p.quantity}${p.side === "SHORT" ? " (short)" : ""}`).join(", ") : "none"}.`);
 }
 
 main().catch((err) => {

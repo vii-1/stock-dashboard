@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import Sidebar from "@/components/Sidebar";
 import MobileNav from "@/components/MobileNav";
 import TickerTape from "@/components/TickerTape";
+import GlobalSearch from "@/components/GlobalSearch";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
@@ -44,6 +45,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <TickerTape />
             </Suspense>
             <MobileNav />
+            {/* Search bar on every page - not sticky, so it never fights the
+                stock pages' own sticky section nav. */}
+            <div className="border-b border-slate-200/80 bg-white/60 dark:border-slate-800 dark:bg-slate-900/40">
+              <div className="mx-auto flex max-w-7xl items-center px-4 py-3 sm:px-6 lg:px-10">
+                <GlobalSearch />
+              </div>
+            </div>
             <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-10">{children}</main>
           </div>
         </div>

@@ -85,4 +85,28 @@ describe("decide", () => {
     expect(decision.action).toBe("HOLD");
     expect(decision.quantity).toBe(0);
   });
+
+  describe("whole shares (NSE)", () => {
+    it("rounds a BUY down to whole shares, leaving room for the fee", () => {
+      mockSuggestion("STRONG_BUY");
+      // 10% of 10,000 = 1,000 at a price of 30 -> 33.33 fractional; with
+      // a 0.1% fee 33 shares cost 990.99, 34 would not fit.
+      const decision = decide({ ...baseInput, currentPrice: 30, position: null, wholeUnits: true, costPct: 0.1 });
+      expect(decision.action).toBe("BUY");
+      expect(decision.quantity).toBe(33);
+    });
+
+    it("holds when the budget can't buy one whole share", () => {
+      mockSuggestion("STRONG_BUY");
+      const decision = decide({ ...baseInput, currentPrice: 2_000, position: null, wholeUnits: true });
+      expect(decision.action).toBe("HOLD");
+      expect(decision.reasons.join(" ")).toMatch(/one whole share/);
+    });
+
+    it("TRIMs to a whole number, and exits a 1-share position outright", () => {
+      mockSuggestion("TRIM");
+      expect(decide({ ...baseInput, position: { quantity: 7, avgBuyPrice: 80 }, wholeUnits: true }).quantity).toBe(3);
+      expect(decide({ ...baseInput, position: { quantity: 1, avgBuyPrice: 80 }, wholeUnits: true }).quantity).toBe(1);
+    });
+  });
 });

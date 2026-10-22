@@ -23,7 +23,7 @@ import { prisma } from "@/lib/prisma";
 import { NIFTY_WATCHLIST, yahooIndiaProvider, yahooUsProvider } from "@/lib/providers/yahooProvider";
 import { coingeckoProvider } from "@/lib/providers/coingeckoProvider";
 import type { MarketDataProvider, Quote } from "@/lib/providers/types";
-import { paperBroker } from "./broker/paperBroker";
+import { paperBroker, TRANSACTION_COST_PCT } from "./broker/paperBroker";
 import { decide } from "./strategy/decisionEngine";
 import {
   checkTrade,
@@ -332,6 +332,8 @@ async function main() {
       position: position ? { quantity: position.quantity, avgBuyPrice: position.avgBuyPrice } : null,
       portfolioValue: totalPortfolioValue,
       cash,
+      wholeUnits: assetClass === "IN_STOCK",
+      costPct: TRANSACTION_COST_PCT,
     });
 
     if (decision.action === "HOLD") {

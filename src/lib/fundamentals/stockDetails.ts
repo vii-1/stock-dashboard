@@ -1,28 +1,38 @@
-import { yahooIndiaProvider } from "@/lib/providers/yahooProvider";
+import { yahooIndiaProvider, yahooUsProvider } from "@/lib/providers/yahooProvider";
 import { scoreHolding, type SuggestionResult } from "@/lib/suggestions/scoreHolding";
 import { getCompanySummary, getStatements, type CompanySummary } from "./yahooFundamentals";
 import {
+  SCALE_INR,
+  SCALE_USD,
   buildBalanceSheet,
   buildCashFlow,
   buildProfitLoss,
   buildProsCons,
   buildRatios,
   latestReturnRatios,
+  periodLabel,
+  type MoneyScale,
   type StatementTable,
 } from "./analysis";
+import { isIndianSymbol, STOCK_SYMBOL } from "./paths";
 
 export interface KeyRatio {
   label: string;
   value: number | null;
   value2?: number | null; // High / Low pairs
-  unit: "cr" | "rs" | "pct" | "x";
+  // "money" = already in the scale's unit (crores / millions); "price" = per share
+  unit: "money" | "price" | "pct" | "x";
   hint?: string;
 }
 
 export interface StockDetails {
-  symbol: string; // RELIANCE.NS
-  ticker: string; // RELIANCE
-  exchange: "NSE" | "BSE";
+  symbol: string; // RELIANCE.NS / AAPL
+  ticker: string; // RELIANCE / AAPL
+  market: "india" | "us";
+  exchange: string; // NSE / BSE / NasdaqGS / NYSE ...
+  currency: "INR" | "USD";
+  scale: MoneyScale; // how statement money is expressed
+  fiscalYearEnd: string | null; // "Mar" / "Sep" - month the FY closes
   name: string;
   price: number;
   changePercent: number;
@@ -40,21 +50,25 @@ export interface StockDetails {
   warnings: string[]; // which optional sources failed
 }
 
-export const INDIAN_SYMBOL = /^[A-Z0-9&\-]{1,20}\.(NS|BO)$/;
+export { STOCK_SYMBOL };
 
 /**
- * Everything the Screener-style panel shows for one NSE/BSE stock. The
- * live quote is required; company stats, statements and the technical
- * read are each optional, so one failing source shows up as a warning
- * rather than an error page.
+ * Everything the Screener-style panel shows for one stock - NSE/BSE
+ * (SYMBOL.NS / .BO, amounts in ₹ crores) or US (plain ticker, amounts in
+ * $ millions). The live quote is required; company stats, statements
+ * and the technical read are each optional, so one failing source shows
+ * up as a warning rather than an error page.
  */
 export async function getStockDetails(symbol: string): Promise<StockDetails> {
   const upper = symbol.toUpperCase();
-  if (!INDIAN_SYMBOL.test(upper)) throw new Error(`Not an NSE/BSE symbol: ${symbol}`);
+  if (!STOCK_SYMBOL.test(upper)) throw new Error(`Not a stock symbol: ${symbol}`);
+  const india = isIndianSymbol(upper);
+  const provider = india ? yahooIndiaProvider : yahooUsProvider;
+  const scale = india ? SCALE_INR : SCALE_USD;
 
   const warnings: string[] = [];
   const [quote, summary, statements, history] = await Promise.all([
-    yahooIndiaProvider.getQuote(upper),
+    provider.getQuote(upper),
     getCompanySummary(upper).catch((err) => {
       console.error(`quoteSummary failed for ${upper}`, err);
       warnings.push("Valuation stats (market cap, P/E, book value) are unavailable right now.");
@@ -65,7 +79,7 @@ export async function getStockDetails(symbol: string): Promise<StockDetails> {
       warnings.push("Financial statements are unavailable right now.");
       return { annual: [], quarterly: [] };
     }),
-    yahooIndiaProvider.getHistory(upper, 120).catch(() => []),
+    provider.getHistory(upper, 120).catch(() => []),
   ]);
 
   const { annual, quarterly } = statements;
@@ -82,13 +96,14 @@ export async function getStockDetails(symbol: string): Promise<StockDetails> {
     lastFour.length === 4 && lastFour.every((p) => typeof p.values.DilutedEPS === "number")
       ? lastFour.reduce((s, p) => s + (p.values.DilutedEPS as number), 0)
       : null;
+  const scaled = (raw: number | null | undefined) => (raw == null ? null : raw / scale.divisor);
 
   const keyRatios: KeyRatio[] = [
-    { label: "Market Cap", value: summary?.marketCap != null ? summary.marketCap / 1e7 : null, unit: "cr" },
-    { label: "Current Price", value: quote.price, unit: "rs" },
-    { label: "High / Low", value: summary?.fiftyTwoWeekHigh ?? null, value2: summary?.fiftyTwoWeekLow ?? null, unit: "rs", hint: "52-week" },
+    { label: "Market Cap", value: scaled(summary?.marketCap), unit: "money" },
+    { label: "Current Price", value: quote.price, unit: "price" },
+    { label: "High / Low", value: summary?.fiftyTwoWeekHigh ?? null, value2: summary?.fiftyTwoWeekLow ?? null, unit: "price", hint: "52-week" },
     { label: "Stock P/E", value: summary?.trailingPE ?? (ttmEps ? quote.price / ttmEps : null), unit: "x" },
-    { label: "Book Value", value: summary?.bookValue ?? null, unit: "rs", hint: "per share" },
+    { label: "Book Value", value: summary?.bookValue ?? null, unit: "price", hint: "per share" },
     { label: "Dividend Yield", value: summary?.dividendYield != null ? summary.dividendYield * 100 : null, unit: "pct" },
     { label: "ROCE", value: ret.roce, unit: "pct", hint: oneOffHint(ret.reportedRoce) },
     { label: "ROE", value: ret.roe, unit: "pct", hint: oneOffHint(ret.reportedRoe) },
@@ -101,12 +116,8 @@ export async function getStockDetails(symbol: string): Promise<StockDetails> {
       unit: "x",
       hint: ret.debtToEquity != null && ret.periodLabel ? `Balance sheet, ${ret.periodLabel}` : undefined,
     },
-    { label: "EPS (TTM)", value: ttmEps, unit: "rs" },
-    {
-      label: "Net Profit (FY)",
-      value: lastAnnual?.values.NetIncome != null ? lastAnnual.values.NetIncome / 1e7 : null,
-      unit: "cr",
-    },
+    { label: "EPS (TTM)", value: ttmEps, unit: "price" },
+    { label: "Net Profit (FY)", value: scaled(lastAnnual?.values.NetIncome), unit: "money" },
   ];
 
   const { pros, cons } = buildProsCons({
@@ -114,6 +125,7 @@ export async function getStockDetails(symbol: string): Promise<StockDetails> {
     quarterly,
     priceToBook: summary?.priceToBook ?? null,
     dividendYield: summary?.dividendYield ?? null,
+    scale,
   });
 
   let technical: SuggestionResult | null = null;
@@ -126,7 +138,11 @@ export async function getStockDetails(symbol: string): Promise<StockDetails> {
   return {
     symbol: upper,
     ticker: upper.replace(/\.(NS|BO)$/, ""),
-    exchange: upper.endsWith(".BO") ? "BSE" : "NSE",
+    market: india ? "india" : "us",
+    exchange: india ? (upper.endsWith(".BO") ? "BSE" : "NSE") : summary?.exchange ?? "US",
+    currency: scale.currency,
+    scale,
+    fiscalYearEnd: lastAnnual ? periodLabel(lastAnnual.date).split(" ")[0] : null,
     name: summary?.name ?? quote.displayName,
     price: quote.price,
     changePercent: quote.changePercent,
@@ -141,11 +157,11 @@ export async function getStockDetails(symbol: string): Promise<StockDetails> {
         }
       : null,
     keyRatios,
-    quarters: buildProfitLoss(quarterly, { annual: false }),
-    profitLoss: buildProfitLoss(annual, { annual: true }),
-    balanceSheet: buildBalanceSheet(annual),
-    cashFlow: buildCashFlow(annual),
-    ratios: buildRatios(annual),
+    quarters: buildProfitLoss(quarterly, { annual: false, scale }),
+    profitLoss: buildProfitLoss(annual, { annual: true, scale }),
+    balanceSheet: buildBalanceSheet(annual, scale),
+    cashFlow: buildCashFlow(annual, scale),
+    ratios: buildRatios(annual, scale),
     pros,
     cons,
     technical,

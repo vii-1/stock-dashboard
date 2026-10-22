@@ -37,6 +37,17 @@ export function formatSigned(value: number, currency: string | null = "INR"): st
   return `${value >= 0 ? "+" : "-"}${formatMoney(Math.abs(value), currency, { fixed: true })}`;
 }
 
+// Compact big amounts with 2 decimals: $5.00T, $23.48B (market caps, volumes).
+export function formatBigMoney(value: number, currency: "INR" | "USD" = "USD"): string {
+  return new Intl.NumberFormat(currency === "INR" ? "en-IN" : "en-US", {
+    style: "currency",
+    currency,
+    notation: "compact",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 export function formatPct(value: number, digits = 2): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }

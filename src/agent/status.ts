@@ -61,12 +61,15 @@ async function main() {
   for (const p of positions) {
     try {
       const quote = await providerForAssetClass(p.assetClass).getQuote(p.symbol);
-      const marketValue = p.quantity * quote.price;
-      const unrealizedPnl = (quote.price - p.avgBuyPrice) * p.quantity;
-      const unrealizedPnlPct = p.avgBuyPrice > 0 ? ((quote.price - p.avgBuyPrice) / p.avgBuyPrice) * 100 : 0;
+      const short = p.side === "SHORT";
+      // Short: avg is the net entry proceeds; it gains as price falls.
+      const marketValue = short ? p.quantity * (2 * p.avgBuyPrice - quote.price) : p.quantity * quote.price;
+      const move = short ? p.avgBuyPrice - quote.price : quote.price - p.avgBuyPrice;
+      const unrealizedPnl = move * p.quantity;
+      const unrealizedPnlPct = p.avgBuyPrice > 0 ? (move / p.avgBuyPrice) * 100 : 0;
       positionsValue += marketValue;
       console.log(
-        `${p.symbol} (${p.assetClass}): ${p.quantity.toFixed(4)} @ avg ${p.avgBuyPrice.toFixed(2)}, now ${quote.price.toFixed(2)} -> ${unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(2)} (${unrealizedPnlPct >= 0 ? "+" : ""}${unrealizedPnlPct.toFixed(1)}%)`
+        `${p.symbol} (${p.assetClass})${short ? " SHORT" : ""}: ${p.quantity.toFixed(4)} @ avg ${p.avgBuyPrice.toFixed(2)}, now ${quote.price.toFixed(2)} -> ${unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(2)} (${unrealizedPnlPct >= 0 ? "+" : ""}${unrealizedPnlPct.toFixed(1)}%)`
       );
     } catch (err) {
       console.log(`${p.symbol} (${p.assetClass}): ${p.quantity.toFixed(4)} @ avg ${p.avgBuyPrice.toFixed(2)} - couldn't fetch a live price`);
@@ -80,7 +83,7 @@ async function main() {
   if (recentOrders.length === 0) console.log("(none yet)");
   for (const o of recentOrders) {
     console.log(
-      `${o.createdAt.toISOString()}  ${o.side.padEnd(4)} ${o.quantity.toFixed(4)} ${o.symbol} @ ${o.price.toFixed(2)}  ${o.status}${o.rejectReason ? ` (${o.rejectReason})` : ""}`
+      `${o.createdAt.toISOString()}  ${o.side.padEnd(5)} ${o.quantity.toFixed(4)} ${o.symbol} @ ${o.price.toFixed(2)}  ${o.status}${o.rejectReason ? ` (${o.rejectReason})` : ""}`
     );
   }
 

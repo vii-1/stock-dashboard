@@ -4,6 +4,8 @@ import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, Pencil, Trash2 } from "lucide-react";
 import StockDetailPanel from "@/components/stock/StockDetailPanel";
+import CryptoDetailPanel from "@/components/stock/CryptoDetailPanel";
+import { marketForAssetClass } from "@/lib/fundamentals/paths";
 import type { Suggestion } from "@/lib/suggestions/scoreHolding";
 import SuggestionBadge from "@/components/SuggestionBadge";
 import SymbolAvatar from "@/components/ui/SymbolAvatar";
@@ -134,7 +136,8 @@ export default function HoldingsTable({ rows, emptyText = "No holdings yet - add
   const router = useRouter();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  // Indian stocks expand into the Screener-style panel (one at a time).
+  // Every holding expands into its fundamentals panel (one at a time):
+  // Screener-style for India/US stocks, coin stats for crypto.
   const [openId, setOpenId] = useState<string | null>(null);
 
   async function handleDelete(id: string) {
@@ -189,7 +192,7 @@ export default function HoldingsTable({ rows, emptyText = "No holdings yet - add
               <tr className={openId === row.id ? "bg-slate-50/80 dark:bg-slate-800/30" : undefined}>
                 <td className="px-3 py-3">
                   <div className="flex items-center gap-3">
-                    {row.assetClass === "IN_STOCK" ? (
+                    {marketForAssetClass(row.assetClass) ? (
                       <button
                         type="button"
                         onClick={() => setOpenId(openId === row.id ? null : row.id)}
@@ -305,7 +308,7 @@ export default function HoldingsTable({ rows, emptyText = "No holdings yet - add
                   <td colSpan={9} className="!whitespace-normal bg-slate-50/60 px-3 py-4 dark:bg-slate-950/40">
                     {/* w-0 + min-w-full: fill the cell without widening the table */}
                     <div className="w-0 min-w-full">
-                      <StockDetailPanel symbol={row.symbol} />
+                      {row.assetClass === "CRYPTO" ? <CryptoDetailPanel id={row.symbol} /> : <StockDetailPanel symbol={row.symbol} />}
                     </div>
                   </td>
                 </tr>

@@ -39,7 +39,9 @@ export default async function UsStocksPage() {
           { key: "losers", label: "Top losers", quotes: losers },
         ]}
         sparks={sparks}
-        footnote="Trend: last 30 days"
+        details="expand"
+        market="us"
+        footnote="Click a stock for fundamentals · Trend: last 30 days"
       />
     </div>
   );

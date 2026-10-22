@@ -51,6 +51,7 @@ export function createPaperBroker(MODE: string, costPct: number = TRANSACTION_CO
         assetClass: p.assetClass,
         quantity: p.quantity,
         avgBuyPrice: p.avgBuyPrice,
+        side: p.side === "SHORT" ? "SHORT" : "LONG",
       }));
     },
 
@@ -63,6 +64,11 @@ export function createPaperBroker(MODE: string, costPct: number = TRANSACTION_CO
       if (price <= 0) {
         return { status: "REJECTED", rejectReason: "Price must be positive" };
       }
+      // Last line of defence, whatever the caller sized: Indian exchanges
+      // don't fill fractional shares, so neither does the paper broker.
+      if (assetClass === "IN_STOCK" && !Number.isInteger(quantity)) {
+        return { status: "REJECTED", rejectReason: `NSE trades whole shares only - got quantity ${quantity}` };
+      }
 
       const account = await getOrCreateAccount();
       const existing = await prisma.paperPosition.findUnique({
@@ -70,6 +76,69 @@ export function createPaperBroker(MODE: string, costPct: number = TRANSACTION_CO
       });
 
       const feeRate = costPct / 100;
+      const existingSide = existing ? (existing.side === "SHORT" ? "SHORT" : "LONG") : null;
+      // One direction per symbol - a long and a short in the same stock
+      // would just be a confusing way of holding less of it.
+      if ((side === "BUY" || side === "SELL") && existingSide === "SHORT") {
+        return { status: "REJECTED", rejectReason: `${symbol} is held SHORT - use COVER, not ${side}` };
+      }
+      if ((side === "SHORT" || side === "COVER") && existingSide === "LONG") {
+        return { status: "REJECTED", rejectReason: `${symbol} is held LONG - can't ${side} it` };
+      }
+
+      // Shorts: the entry proceeds (net of fee) are held back as margin -
+      // cash drops by that amount, the same capital a long of that size
+      // would tie up - and come back with the P&L on cover. No borrow
+      // fees or exchange margin rules: these are same-day MIS shorts.
+      if (side === "SHORT") {
+        const grossProceeds = quantity * price;
+        const fee = grossProceeds * feeRate;
+        const margin = grossProceeds - fee;
+        if (grossProceeds + fee > account.cash) {
+          return {
+            status: "REJECTED",
+            rejectReason: `Insufficient cash for short margin: need ${(grossProceeds + fee).toFixed(2)}, have ${account.cash.toFixed(2)}`,
+          };
+        }
+        const newQuantity = (existing?.quantity ?? 0) + quantity;
+        const newAvg = existing ? (existing.avgBuyPrice * existing.quantity + margin) / newQuantity : margin / quantity;
+        await prisma.$transaction([
+          prisma.paperAccount.update({ where: { mode: MODE }, data: { cash: account.cash - margin } }),
+          existing
+            ? prisma.paperPosition.update({
+                where: { mode_symbol: { mode: MODE, symbol } },
+                data: { quantity: newQuantity, avgBuyPrice: newAvg },
+              })
+            : prisma.paperPosition.create({
+                data: { mode: MODE, symbol, assetClass, quantity, avgBuyPrice: newAvg, side: "SHORT" },
+              }),
+        ]);
+        return { status: "FILLED", price, fee };
+      }
+
+      if (side === "COVER") {
+        if (!existing || existing.quantity < quantity) {
+          return {
+            status: "REJECTED",
+            rejectReason: `Insufficient short position: have ${existing?.quantity ?? 0}, tried to cover ${quantity}`,
+          };
+        }
+        const grossCost = quantity * price;
+        const fee = grossCost * feeRate;
+        const margin = existing.avgBuyPrice * quantity;
+        const realizedPnl = margin - grossCost - fee;
+        const remaining = existing.quantity - quantity;
+        await prisma.$transaction([
+          prisma.paperAccount.update({ where: { mode: MODE }, data: { cash: account.cash + margin + realizedPnl } }),
+          remaining > 1e-8
+            ? prisma.paperPosition.update({
+                where: { mode_symbol: { mode: MODE, symbol } },
+                data: { quantity: remaining },
+              })
+            : prisma.paperPosition.delete({ where: { mode_symbol: { mode: MODE, symbol } } }),
+        ]);
+        return { status: "FILLED", price, realizedPnl, fee };
+      }
 
       if (side === "BUY") {
         const grossCost = quantity * price;

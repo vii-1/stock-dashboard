@@ -1,14 +1,14 @@
 import type { RowUnit, StatementTable as Table } from "@/lib/fundamentals/analysis";
 
-export function formatCell(value: number | null, unit: RowUnit): string {
+export function formatCell(value: number | null, unit: RowUnit, locale = "en-IN"): string {
   if (value == null || !Number.isFinite(value)) return "--";
   switch (unit) {
-    case "cr":
-      return Math.round(value).toLocaleString("en-IN");
+    case "money":
+      return Math.round(value).toLocaleString(locale);
     case "pct":
       return `${Math.round(value)}%`;
-    case "rs":
-      return value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    case "perShare":
+      return value.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     case "x":
       return value.toFixed(2);
   }
@@ -55,7 +55,7 @@ function TrendBars({ values }: { values: (number | null)[] }) {
 }
 
 /**
- * Screener-style financial statement grid: labels pinned on the left,
+ * Screener-style financial statement grid (₹ crores or $ millions, per table.locale): labels pinned on the left,
  * one column per period (oldest -> newest), subtotal rows in bold, the
  * latest period tinted. Scrolls horizontally on narrow screens with the
  * label column sticky.
@@ -101,14 +101,14 @@ export default function StatementTable({ table, unitNote }: { table: Table; unit
                 {row.values.map((x, i) => {
                   const prev = i > 0 ? row.values[i - 1] : null;
                   const change =
-                    row.unit === "cr" && x != null && prev != null && prev !== 0 ? ((x - prev) / Math.abs(prev)) * 100 : null;
+                    row.unit === "money" && x != null && prev != null && prev !== 0 ? ((x - prev) / Math.abs(prev)) * 100 : null;
                   return (
                     <td
                       key={i}
                       title={change != null ? `${change >= 0 ? "+" : ""}${change.toFixed(1)}% vs ${table.periods[i - 1]}` : undefined}
                       className={`whitespace-nowrap px-4 py-2 text-right ${i === lastIdx ? "bg-blue-50/60 dark:bg-blue-500/5" : ""} ${x != null && x < 0 ? "text-loss" : ""}`}
                     >
-                      {formatCell(x, row.unit)}
+                      {formatCell(x, row.unit, table.locale)}
                     </td>
                   );
                 })}

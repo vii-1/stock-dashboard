@@ -15,7 +15,8 @@
     "agent:status": "tsx src/agent/status.ts",
     "test": "vitest run",
     "agent:backtest-intraday": "tsx src/agent/backtest/runIntradayBacktest.ts",
-    "agent:run-intraday": "tsx src/agent/runIntraday.ts"
+    "agent:run-intraday": "tsx src/agent/runIntraday.ts",
+    "agent:report": "tsx src/agent/dailyReport.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.19.1",

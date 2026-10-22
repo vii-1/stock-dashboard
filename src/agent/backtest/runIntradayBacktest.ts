@@ -18,6 +18,7 @@
 import { getIntradayBars, NIFTY_WATCHLIST, type IntradayBar } from "@/lib/providers/yahooProvider";
 import { INTRADAY_PARAMS, intradaySignal, istClock, type IntradayParams } from "../strategy/intradayStrategy";
 import { INTRADAY_COST_PCT } from "../broker/paperBroker";
+import { positionValue, type PositionSide } from "../broker/types";
 import { checkTrade, freshRiskState, INTRADAY_RISK_LIMITS, recordTrade, type RiskState } from "../riskManager";
 
 const STARTING_CASH = 100_000;
@@ -26,19 +27,40 @@ const STARTING_CASH = 100_000;
 const WINDOW_BARS = 200;
 const IN_SAMPLE_FRACTION = 2 / 3;
 
+// The 2026-10-22 filters (see INTRADAY_PARAMS), alone and combined.
+// BASE is the pre-10-22 strategy, so the table stays comparable no
+// matter what INTRADAY_PARAMS is currently set to.
+const BASE: IntradayParams = { ...INTRADAY_PARAMS, marketFilter: false, reversalConfirmBars: 1, minEmaGapPct: 0, maxOpenPositions: 30, allowShorts: false };
+const ALL_FOUR: IntradayParams = { ...BASE, marketFilter: true, reversalConfirmBars: 2, minEmaGapPct: 0.03, maxOpenPositions: 5 };
 const VARIANTS: { name: string; params: IntradayParams }[] = [
-  { name: "baseline (EMA reversal exit)", params: INTRADAY_PARAMS },
-  { name: "no reversal exit", params: { ...INTRADAY_PARAMS, exitOnTrendReversal: false } },
+  { name: "baseline (pre 10-22)", params: BASE },
+  { name: "no reversal exit", params: { ...BASE, exitOnTrendReversal: false } },
+  { name: "+ market filter", params: { ...BASE, marketFilter: true } },
+  { name: "+ 2-bar reversal confirm", params: { ...BASE, reversalConfirmBars: 2 } },
+  { name: "+ min EMA gap 0.03%", params: { ...BASE, minEmaGapPct: 0.03 } },
+  { name: "+ max 5 positions", params: { ...BASE, maxOpenPositions: 5 } },
+  { name: "market + 2-bar", params: { ...BASE, marketFilter: true, reversalConfirmBars: 2 } },
+  { name: "market + 2-bar + max 5", params: { ...BASE, marketFilter: true, reversalConfirmBars: 2, maxOpenPositions: 5 } },
+  { name: "all four (long only)", params: ALL_FOUR },
+  { name: "all four + shorts", params: { ...ALL_FOUR, allowShorts: true } },
+  { name: "baseline + shorts", params: { ...BASE, allowShorts: true } },
+  { name: "current INTRADAY_PARAMS", params: INTRADAY_PARAMS },
 ];
+
+const NIFTY_INDEX = "^NSEI";
 
 interface OpenPosition {
   quantity: number;
-  avgBuyPrice: number; // incl. entry fee, same as paperBroker
+  // Same convention as paperBroker: LONG cost/share incl. fee, SHORT
+  // proceeds/share net of fee.
+  avgBuyPrice: number;
+  side: PositionSide;
   entryTime: number;
 }
 
 interface ClosedTrade {
   symbol: string;
+  side: PositionSide;
   entryTime: number;
   exitTime: number;
   pnl: number;
@@ -72,7 +94,12 @@ function exitBucket(reason: string): string {
   return "end-of-day (missing bars)";
 }
 
-function simulate(barsBySymbol: Map<string, IntradayBar[]>, params: IntradayParams, sessionDays: Set<string>): SimResult {
+function simulate(
+  barsBySymbol: Map<string, IntradayBar[]>,
+  params: IntradayParams,
+  sessionDays: Set<string>,
+  indexBars: IntradayBar[] = []
+): SimResult {
   const indexByTime = new Map<string, Map<number, number>>();
   const allTimes = new Set<number>();
   for (const [symbol, bars] of barsBySymbol) {
@@ -99,17 +126,19 @@ function simulate(barsBySymbol: Map<string, IntradayBar[]>, params: IntradayPara
   const dailyPnl = new Map<string, number>();
 
   const equity = () =>
-    cash + [...positions].reduce((s, [sym, p]) => s + p.quantity * (lastPrice.get(sym) ?? p.avgBuyPrice), 0);
+    cash + [...positions].reduce((s, [sym, p]) => s + positionValue(p, lastPrice.get(sym) ?? p.avgBuyPrice), 0);
 
   function sell(symbol: string, price: number, time: number, reason: string) {
     const p = positions.get(symbol)!;
     const gross = p.quantity * price;
     const fee = gross * (INTRADAY_COST_PCT / 100);
-    const pnl = gross - fee - p.avgBuyPrice * p.quantity;
-    cash += gross - fee;
+    const basis = p.avgBuyPrice * p.quantity;
+    // Long: proceeds - cost. Short (cover): held margin - buy-back cost.
+    const pnl = p.side === "SHORT" ? basis - gross - fee : gross - fee - basis;
+    cash += p.side === "SHORT" ? basis + pnl : gross - fee;
     feesPaid += fee;
     positions.delete(symbol);
-    closed.push({ symbol, entryTime: p.entryTime, exitTime: time, pnl, pnlPct: (pnl / (p.avgBuyPrice * p.quantity)) * 100, exitReason: reason });
+    closed.push({ symbol, side: p.side, entryTime: p.entryTime, exitTime: time, pnl, pnlPct: (pnl / (p.avgBuyPrice * p.quantity)) * 100, exitReason: reason });
     const day = istClock(time).day;
     dailyPnl.set(day, (dailyPnl.get(day) ?? 0) + pnl);
     const before = risk.killSwitchActive;
@@ -117,7 +146,10 @@ function simulate(barsBySymbol: Map<string, IntradayBar[]>, params: IntradayPara
     if (!before && risk.killSwitchActive) killSwitchDays++;
   }
 
+  let indexEnd = 0; // indexBars[0..indexEnd) have time <= current bar
   for (const time of times) {
+    while (indexEnd < indexBars.length && indexBars[indexEnd].time <= time) indexEnd++;
+    const market = { index: indexBars.slice(Math.max(0, indexEnd - WINDOW_BARS), indexEnd) };
     const day = istClock(time).day;
     if (day !== currentDay) {
       // Safety net: anything still open from the previous session (a
@@ -138,14 +170,15 @@ function simulate(barsBySymbol: Map<string, IntradayBar[]>, params: IntradayPara
       // indicator warmup, the same history the live runner would have.
       const window = bars.slice(Math.max(0, i - WINDOW_BARS + 1), i + 1);
       const position = positions.get(symbol) ?? null;
-      const signal = intradaySignal(window, bar.close, position, params);
+      const signal = intradaySignal(window, bar.close, position, params, market);
 
       // Exits are protective - never blocked by trade-count or kill-switch caps.
-      if (signal.action === "SELL" && position) {
+      if ((signal.action === "SELL" || signal.action === "COVER") && position) {
         sell(symbol, bar.close, time, signal.reasons[0]);
         continue;
       }
-      if (signal.action !== "BUY" || position) continue;
+      if ((signal.action !== "BUY" && signal.action !== "SHORT") || position) continue;
+      if (positions.size >= params.maxOpenPositions) continue;
 
       const portfolioValue = equity();
       const budget = Math.min(portfolioValue * (INTRADAY_RISK_LIMITS.maxPositionPct / 100), cash);
@@ -160,9 +193,14 @@ function simulate(barsBySymbol: Map<string, IntradayBar[]>, params: IntradayPara
 
       const gross = quantity * bar.close;
       const fee = gross * (INTRADAY_COST_PCT / 100);
-      cash -= gross + fee;
       feesPaid += fee;
-      positions.set(symbol, { quantity, avgBuyPrice: (gross + fee) / quantity, entryTime: time });
+      if (signal.action === "SHORT") {
+        cash -= gross - fee; // margin held = net proceeds, as paperBroker
+        positions.set(symbol, { quantity, avgBuyPrice: (gross - fee) / quantity, side: "SHORT", entryTime: time });
+      } else {
+        cash -= gross + fee;
+        positions.set(symbol, { quantity, avgBuyPrice: (gross + fee) / quantity, side: "LONG", entryTime: time });
+      }
       risk = recordTrade(risk, 0, INTRADAY_RISK_LIMITS, portfolioValue);
     }
 
@@ -213,6 +251,10 @@ function printReport(name: string, r: SimResult, symbolCount: number) {
   console.log(`Fees paid (${INTRADAY_COST_PCT}%/side): ${r.feesPaid.toFixed(2)} - already included above.`);
   console.log(`Green / red days:   ${days.filter((d) => d > 0).length} / ${days.filter((d) => d <= 0).length}  (best ${Math.max(0, ...days).toFixed(2)}, worst ${Math.min(0, ...days).toFixed(2)})`);
   console.log(`Kill-switch days:   ${r.killSwitchDays}`);
+  for (const side of ["LONG", "SHORT"] as const) {
+    const t = r.closed.filter((c) => c.side === side);
+    if (t.length) console.log(`  ${side.padEnd(6)} ${String(t.length).padStart(4)} trades  win ${((t.filter((c) => c.pnl > 0).length / t.length) * 100).toFixed(0)}%  P&L ${t.reduce((s, c) => s + c.pnl, 0).toFixed(2)}`);
+  }
 
   const buckets = new Map<string, { n: number; pnl: number }>();
   for (const t of r.closed) {
@@ -241,6 +283,13 @@ async function main() {
     })
   );
 
+  let indexBars: IntradayBar[] = [];
+  try {
+    indexBars = await getIntradayBars(NIFTY_INDEX, "60d");
+  } catch (err) {
+    console.error(`  ${NIFTY_INDEX}: unavailable - market-filter variants will never buy (${err instanceof Error ? err.message : err})`);
+  }
+
   const allDays = [...new Set([...barsBySymbol.values()].flatMap((bars) => bars.map((b) => istClock(b.time).day)))].sort();
   // Skip the first session: indicators need prior bars to warm up.
   const tradable = allDays.slice(1);
@@ -248,13 +297,13 @@ async function main() {
   const inSample = new Set(tradable.slice(0, cut));
   const outOfSample = new Set(tradable.slice(cut));
 
-  for (const v of VARIANTS) printReport(v.name, simulate(barsBySymbol, v.params, new Set(tradable)), barsBySymbol.size);
+  for (const v of VARIANTS) printReport(v.name, simulate(barsBySymbol, v.params, new Set(tradable), indexBars), barsBySymbol.size);
 
   console.log(`\n=== Walk-forward: in-sample ${[...inSample][0]}..${[...inSample].at(-1)} (${inSample.size}d) | out-of-sample ${[...outOfSample][0]}..${[...outOfSample].at(-1)} (${outOfSample.size}d) ===`);
   console.log(`${"variant".padEnd(30)} ${"in-sample".padStart(10)} ${"PF".padStart(5)}   ${"held-out".padStart(10)} ${"PF".padStart(5)}`);
   for (const v of VARIANTS) {
-    const a = simulate(barsBySymbol, v.params, inSample);
-    const b = simulate(barsBySymbol, v.params, outOfSample);
+    const a = simulate(barsBySymbol, v.params, inSample, indexBars);
+    const b = simulate(barsBySymbol, v.params, outOfSample, indexBars);
     const pf = (r: SimResult) => (profitFactor(r.closed)?.toFixed(2) ?? "n/a").padStart(5);
     console.log(`${v.name.padEnd(30)} ${(a.returnPct.toFixed(2) + "%").padStart(10)} ${pf(a)}   ${(b.returnPct.toFixed(2) + "%").padStart(10)} ${pf(b)}`);
   }

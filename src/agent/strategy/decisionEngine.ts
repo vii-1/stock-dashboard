@@ -20,6 +20,13 @@ export interface DecisionInput {
   position: Position | null;
   portfolioValue: number;
   cash: number;
+  // NSE (and BSE) only trade whole shares - Zerodha/Angel reject
+  // 23.0123 KOTAKBANK. Set for IN_STOCK; US stocks and crypto keep
+  // fractional units, which their brokers/exchanges do allow.
+  wholeUnits?: boolean;
+  // Per-side fee %, so a cash-limited buy leaves room for the fee
+  // instead of being rejected by the broker for being ₹10 short.
+  costPct?: number;
 }
 
 export interface Decision {
@@ -46,7 +53,8 @@ const NEW_POSITION_TARGET_PCT = 10;
 const DUST_POSITION_PCT = 0.5;
 
 export function decide(input: DecisionInput): Decision {
-  const { symbol, currentPrice, history, position, portfolioValue, cash } = input;
+  const { symbol, currentPrice, history, position, portfolioValue, cash, wholeUnits = false, costPct = 0 } = input;
+  const units = (q: number) => (wholeUnits ? Math.floor(q + 1e-9) : q);
 
   const positionValue = position ? position.quantity * currentPrice : 0;
   const portfolioWeightPct = portfolioValue > 0 ? (positionValue / portfolioValue) * 100 : 0;
@@ -70,7 +78,7 @@ export function decide(input: DecisionInput): Decision {
 
       const targetValue = portfolioValue * (NEW_POSITION_TARGET_PCT / 100);
       const spend = Math.min(targetValue, cash);
-      const quantity = currentPrice > 0 ? spend / currentPrice : 0;
+      const quantity = currentPrice > 0 ? units(spend / (currentPrice * (1 + costPct / 100))) : 0;
 
       if (quantity <= 0) {
         return {
@@ -78,7 +86,7 @@ export function decide(input: DecisionInput): Decision {
           symbol,
           quantity: 0,
           suggestion,
-          reasons: [...reasons, "Not enough cash available to open a position."],
+          reasons: [...reasons, wholeUnits ? "Not enough cash available for one whole share." : "Not enough cash available to open a position."],
         };
       }
 
@@ -97,7 +105,9 @@ export function decide(input: DecisionInput): Decision {
       // forever (see DUST_POSITION_PCT above).
       if (!position) return { action: "HOLD", symbol, quantity: 0, suggestion, reasons };
       const isDust = portfolioWeightPct > 0 && portfolioWeightPct < DUST_POSITION_PCT;
-      const quantity = isDust ? position.quantity : position.quantity / 2;
+      // Whole shares: half of 3 is 1; a 1-share position just exits.
+      const half = units(position.quantity / 2);
+      const quantity = isDust || half <= 0 ? position.quantity : half;
       return { action: "SELL", symbol, quantity, suggestion, reasons };
     }
 

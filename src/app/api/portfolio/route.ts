@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { resolveAvgBuyPrice } from "@/lib/fx";
+import { resolveHoldingSymbol, SymbolNotFoundError, type ResolvedSymbol } from "@/lib/portfolio/resolveSymbol";
 
 const ASSET_CLASSES = ["IN_STOCK", "US_STOCK", "CRYPTO"] as const;
 
@@ -34,6 +35,20 @@ export async function POST(request: NextRequest) {
   if (typeof quantity !== "number" || !(quantity > 0)) {
     return NextResponse.json({ error: "quantity must be a positive number" }, { status: 400 });
   }
+  let resolvedSymbol: ResolvedSymbol;
+  try {
+    resolvedSymbol = await resolveHoldingSymbol(assetClass, symbol);
+  } catch (err) {
+    if (err instanceof SymbolNotFoundError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    console.error(`Symbol lookup failed for ${assetClass} ${symbol}`, err);
+    return NextResponse.json(
+      { error: "Couldn't reach the price source to verify this symbol. Try again in a minute." },
+      { status: 502 }
+    );
+  }
+
   const parsedBuyDate = new Date(buyDate);
   if (isNaN(parsedBuyDate.getTime())) {
     return NextResponse.json({ error: "buyDate must be a valid date" }, { status: 400 });
@@ -56,8 +71,8 @@ export async function POST(request: NextRequest) {
   const holding = await prisma.holding.create({
     data: {
       assetClass,
-      symbol: symbol.trim(),
-      displayName: typeof displayName === "string" && displayName.trim() ? displayName.trim() : null,
+      symbol: resolvedSymbol.symbol,
+      displayName: typeof displayName === "string" && displayName.trim() ? displayName.trim() : resolvedSymbol.displayName,
       quantity,
       avgBuyPrice: resolved.avgBuyPrice,
       buyDate: parsedBuyDate,

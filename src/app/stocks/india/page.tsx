@@ -41,6 +41,7 @@ export default async function IndiaStocksPage() {
         ]}
         sparks={sparks}
         details="expand"
+        market="india"
         footnote="Click a stock for fundamentals · Trend: last 30 days"
       />
     </div>

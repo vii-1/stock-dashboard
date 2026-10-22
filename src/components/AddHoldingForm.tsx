@@ -3,11 +3,15 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import BuyPriceInput, { defaultBuyPrice, type BuyPriceValue } from "@/components/BuyPriceInput";
+import SymbolAutocomplete from "@/components/SymbolAutocomplete";
+
+const INPUT_CLASS =
+  "rounded-md border border-slate-300 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-900/15 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-slate-100/15";
 
 const ASSET_CLASSES = [
-  { value: "IN_STOCK", label: "India Stock (e.g. RELIANCE.NS)" },
+  { value: "IN_STOCK", label: "India Stock (e.g. RELIANCE)" },
   { value: "US_STOCK", label: "US Stock (e.g. AAPL)" },
-  { value: "CRYPTO", label: "Crypto (CoinGecko id, e.g. bitcoin)" },
+  { value: "CRYPTO", label: "Crypto (name or ticker, e.g. Bitcoin or BTC)" },
 ];
 
 // defaultAssetClass: pre-selects the class for the tab the form opens on.
@@ -21,6 +25,12 @@ export default function AddHoldingForm({ defaultAssetClass = ASSET_CLASSES[0].va
   const [quantity, setQuantity] = useState("");
   const [buyDate, setBuyDate] = useState("");
   const [price, setPrice] = useState<BuyPriceValue>(defaultBuyPrice(defaultAssetClass));
+  const [displayName, setDisplayName] = useState("");
+  // True while the name field holds a suggestion's name the user hasn't
+  // edited - so picking a different suggestion can replace it.
+  const [nameFromSuggestion, setNameFromSuggestion] = useState(false);
+  // Remount the symbol box after a successful add so it clears too.
+  const [formKey, setFormKey] = useState(0);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,6 +68,9 @@ export default function AddHoldingForm({ defaultAssetClass = ASSET_CLASSES[0].va
       setQuantity("");
       setBuyDate("");
       setPrice(defaultBuyPrice(assetClass));
+      setDisplayName("");
+      setNameFromSuggestion(false);
+      setFormKey((k) => k + 1);
       setOpen(false);
       router.refresh();
     } catch (err) {
@@ -102,14 +115,34 @@ export default function AddHoldingForm({ defaultAssetClass = ASSET_CLASSES[0].va
         </select>
       </label>
 
-      <label className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
-        Symbol
-        <input name="symbol" required className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-900/15 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-slate-100/15" />
-      </label>
+      <div className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
+        <span>Symbol</span>
+        <SymbolAutocomplete
+          key={formKey}
+          assetClass={assetClass}
+          name="symbol"
+          inputClassName={INPUT_CLASS}
+          onSelect={(r) => {
+            // Fill the name from the suggestion unless the user typed their own.
+            if (r && (displayName === "" || nameFromSuggestion)) {
+              setDisplayName(r.name);
+              setNameFromSuggestion(true);
+            }
+          }}
+        />
+      </div>
 
       <label className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
         Display name (optional)
-        <input name="displayName" className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-slate-900/15 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:focus:ring-slate-100/15" />
+        <input
+          name="displayName"
+          value={displayName}
+          onChange={(e) => {
+            setDisplayName(e.target.value);
+            setNameFromSuggestion(false);
+          }}
+          className={INPUT_CLASS}
+        />
       </label>
 
       <label className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">

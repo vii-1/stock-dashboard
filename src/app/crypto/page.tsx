@@ -38,7 +38,9 @@ export default async function CryptoPage() {
           { key: "gainers", label: "Top gainers", quotes: gainers },
           { key: "losers", label: "Top losers", quotes: losers },
         ]}
-        footnote="24h change"
+        details="expand"
+        market="crypto"
+        footnote="Click a coin for details · 24h change"
       />
     </div>
   );

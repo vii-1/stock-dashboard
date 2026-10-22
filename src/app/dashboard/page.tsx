@@ -12,9 +12,9 @@ import ChangeText from "@/components/ui/ChangeText";
 import Sparkline from "@/components/ui/Sparkline";
 
 const MARKETS = [
-  { key: "India", href: "/stocks/india", provider: yahooIndiaProvider },
-  { key: "US", href: "/stocks/us", provider: yahooUsProvider },
-  { key: "Crypto", href: "/crypto", provider: coingeckoProvider },
+  { key: "India", href: "/stocks/india", provider: yahooIndiaProvider, detail: "india" as const },
+  { key: "US", href: "/stocks/us", provider: yahooUsProvider, detail: "us" as const },
+  { key: "Crypto", href: "/crypto", provider: coingeckoProvider, detail: "crypto" as const },
 ];
 
 // Fixed order -> fixed categorical slot (series-1..4), so a class keeps
@@ -234,7 +234,7 @@ export default async function DashboardPage() {
               {market.error ? (
                 <p className="px-4 py-6 text-sm text-loss">{market.error}</p>
               ) : (
-                <MoversTable quotes={market.quotes} compact details="link" />
+                <MoversTable quotes={market.quotes} compact details="link" market={market.detail} />
               )}
             </div>
           ))}

@@ -2,30 +2,48 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Maximize2, ThumbsDown, ThumbsUp } from "lucide-react";
+import { ExternalLink, Maximize2 } from "lucide-react";
 import type { KeyRatio, StockDetails } from "@/lib/fundamentals/stockDetails";
 import SuggestionBadge from "@/components/SuggestionBadge";
+import { formatBigMoney, formatMoney } from "@/lib/format";
+import { detailPath } from "@/lib/fundamentals/paths";
 import ChangeText from "@/components/ui/ChangeText";
 import StatementTable from "./StatementTable";
 import PriceChart from "./PriceChart";
+import ProsConsCards from "./ProsConsCards";
+import PriceLevelsCard from "./PriceLevelsCard";
 
 const SECTIONS = [
-  { key: "quarters", label: "Quarters", note: "Consolidated figures in ₹ Crores · latest quarter highlighted" },
-  { key: "profitLoss", label: "Profit & Loss", note: "Consolidated figures in ₹ Crores · financial years ending March" },
-  { key: "balanceSheet", label: "Balance Sheet", note: "Consolidated figures in ₹ Crores" },
-  { key: "cashFlow", label: "Cash Flow", note: "Consolidated figures in ₹ Crores" },
-  { key: "ratios", label: "Ratios", note: "Computed from the statements above" },
+  { key: "quarters", label: "Quarters" },
+  { key: "profitLoss", label: "Profit & Loss" },
+  { key: "balanceSheet", label: "Balance Sheet" },
+  { key: "cashFlow", label: "Cash Flow" },
+  { key: "ratios", label: "Ratios" },
 ] as const;
 type SectionKey = (typeof SECTIONS)[number]["key"];
 
-function formatRatio(r: KeyRatio): string {
-  const n = (x: number, d = 2) => x.toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
+// Unit line above each table - ₹ Crores for NSE/BSE, $ Millions for US.
+function sectionNote(key: SectionKey, data: StockDetails): string {
+  const unit = `Consolidated figures in ${data.scale.longLabel}`;
+  if (key === "quarters") return `${unit} · latest quarter highlighted`;
+  if (key === "profitLoss") return data.fiscalYearEnd ? `${unit} · financial years ending ${data.fiscalYearEnd}` : unit;
+  if (key === "ratios") return "Computed from the statements above";
+  return unit;
+}
+
+function formatRatio(r: KeyRatio, data: StockDetails): string {
+  const locale = data.scale.locale;
+  const sym = data.currency === "INR" ? "₹" : "$";
+  const n = (x: number, d = 2) => x.toLocaleString(locale, { minimumFractionDigits: d, maximumFractionDigits: d });
   if (r.value == null) return "--";
   switch (r.unit) {
-    case "cr":
-      return `₹ ${Math.round(r.value).toLocaleString("en-IN")} Cr.`;
-    case "rs":
-      return r.value2 != null ? `₹ ${n(r.value, 0)} / ${n(r.value2, 0)}` : `₹ ${n(r.value)}`;
+    case "money":
+      // India reads crores (₹ 3,01,339 Cr.); US reads compact ($3.81T).
+      return data.currency === "INR"
+        ? `₹ ${Math.round(r.value).toLocaleString(locale)} Cr.`
+        : formatBigMoney(r.value * data.scale.divisor, "USD");
+    case "price":
+      return r.value2 != null ? `${sym} ${n(r.value, 0)} / ${n(r.value2, 0)}` : `${sym} ${n(r.value)}`;
     case "pct":
       return `${r.value.toFixed(2)} %`;
     case "x":
@@ -38,7 +56,7 @@ function Card({ children, className = "" }: { children: React.ReactNode; classNa
 }
 
 /**
- * Screener-style stock view for one NSE/BSE symbol. `variant="inline"`
+ * Screener-style stock view for one NSE/BSE or US symbol. `variant="inline"`
  * is the expanded row (statements behind tabs, link to full page);
  * `variant="page"` stacks every section like Screener's long page.
  */
@@ -59,7 +77,7 @@ export default function StockDetailPanel({
   useEffect(() => {
     if (initial) return;
     let cancelled = false;
-    fetch(`/api/stocks/india/${encodeURIComponent(symbol)}/details`)
+    fetch(`/api/fundamentals/stock/${encodeURIComponent(symbol)}`)
       .then(async (res) => {
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "Failed to load");
@@ -99,7 +117,7 @@ export default function StockDetailPanel({
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <h2 className={`font-semibold tracking-tight text-slate-900 dark:text-white ${inline ? "text-xl" : "text-3xl"}`}>{data.name}</h2>
               <span className="text-lg font-semibold tabular-nums">
-                ₹{data.price.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {formatMoney(data.price, data.currency)}
               </span>
               <ChangeText pct={data.changePercent} className="text-sm" />
             </div>
@@ -124,7 +142,7 @@ export default function StockDetailPanel({
               </span>
             )}
             {inline && (
-              <Link href={`/stocks/india/${encodeURIComponent(data.symbol)}`} className="chip gap-1.5 !py-1 text-xs">
+              <Link href={detailPath(data.market, data.symbol)} className="chip gap-1.5 !py-1 text-xs">
                 <Maximize2 size={12} /> Full page
               </Link>
             )}
@@ -144,7 +162,7 @@ export default function StockDetailPanel({
                 <dt className={`whitespace-nowrap text-slate-500 dark:text-slate-400 ${r.hint ? "cursor-help underline decoration-slate-300 decoration-dotted underline-offset-4 dark:decoration-slate-600" : ""}`}>
                   {r.label}
                 </dt>
-                <dd className="whitespace-nowrap font-semibold tabular-nums text-slate-900 dark:text-white">{formatRatio(r)}</dd>
+                <dd className="whitespace-nowrap font-semibold tabular-nums text-slate-900 dark:text-white">{formatRatio(r, data)}</dd>
               </div>
             ))}
           </dl>
@@ -157,7 +175,7 @@ export default function StockDetailPanel({
                 {aboutOpen ? "Show less" : "Read more"}
               </button>
               {profile.employees != null && (
-                <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">{profile.employees.toLocaleString("en-IN")} employees</p>
+                <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">{profile.employees.toLocaleString(data.scale.locale)} employees</p>
               )}
             </div>
           )}
@@ -170,33 +188,14 @@ export default function StockDetailPanel({
 
       {/* Price chart */}
       <Card>
-        <PriceChart symbol={data.symbol} />
+        <PriceChart endpoint={`/api/fundamentals/stock/${encodeURIComponent(data.symbol)}/chart`} label={data.ticker} currency={data.currency} />
       </Card>
 
+      {/* Support/resistance, volume profile, big buyers, buy zone */}
+      <PriceLevelsCard symbol={data.symbol} />
+
       {/* Pros / Cons */}
-      {(data.pros.length > 0 || data.cons.length > 0) && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="rounded-2xl border border-green-300 bg-green-50/40 p-5 dark:border-green-800 dark:bg-green-900/10">
-            <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-green-800 dark:text-green-300">
-              <ThumbsUp size={14} /> Pros
-            </h3>
-            <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-slate-700 dark:text-slate-300">
-              {data.pros.length ? data.pros.map((p) => <li key={p}>{p}</li>) : <li className="list-none -ml-5 text-slate-400">Nothing stands out.</li>}
-            </ul>
-          </div>
-          <div className="rounded-2xl border border-red-300 bg-red-50/40 p-5 dark:border-red-900 dark:bg-red-900/10">
-            <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-red-800 dark:text-red-300">
-              <ThumbsDown size={14} /> Cons
-            </h3>
-            <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-slate-700 dark:text-slate-300">
-              {data.cons.length ? data.cons.map((c) => <li key={c}>{c}</li>) : <li className="list-none -ml-5 text-slate-400">Nothing stands out.</li>}
-            </ul>
-          </div>
-          <p className="text-xs text-slate-400 md:col-span-2">
-            * Pros and cons are generated by rules from the figures below - a starting point for research, not advice.
-          </p>
-        </div>
-      )}
+      <ProsConsCards pros={data.pros} cons={data.cons} note="Pros and cons are generated by rules from the figures below - a starting point for research, not advice." />
 
       {/* Statements: tabs inline, stacked on the full page */}
       {!hasStatements ? (
@@ -222,7 +221,7 @@ export default function StockDetailPanel({
             ))}
           </div>
           {SECTIONS.filter((s) => s.key === section).map((s) => (
-            <StatementTable key={s.key} table={data[s.key]} unitNote={s.note} />
+            <StatementTable key={s.key} table={data[s.key]} unitNote={sectionNote(s.key, data)} />
           ))}
         </Card>
       ) : (
@@ -231,7 +230,7 @@ export default function StockDetailPanel({
             <h2 id={s.key} className="mb-1 scroll-mt-20 text-xl font-semibold tracking-tight">
               {s.label === "Quarters" ? "Quarterly Results" : s.label}
             </h2>
-            <StatementTable table={data[s.key]} unitNote={s.note} />
+            <StatementTable table={data[s.key]} unitNote={sectionNote(s.key, data)} />
           </Card>
         ))
       )}

@@ -61,8 +61,11 @@ model PaperPosition {
   mode        String
   symbol      String
   assetClass  String
-  quantity    Float
+  quantity    Float // always positive - direction is `side`
+  // LONG: cost per share incl. entry fee. SHORT: proceeds per share net
+  // of entry fee (the price the short is effectively "sold" at).
   avgBuyPrice Float
+  side        String   @default("LONG") // "LONG" | "SHORT" (intraday shorts only)
   updatedAt   DateTime @updatedAt
 
   @@unique([mode, symbol])
@@ -74,7 +77,7 @@ model PaperPosition {
 model Order {
   id           String   @id @default(cuid())
   mode         String // "PAPER" | "TESTNET" | "LIVE"
-  side         String // "BUY" | "SELL"
+  side         String // "BUY" | "SELL" | "SHORT" (open short) | "COVER" (close short)
   assetClass   String
   symbol       String
   quantity     Float

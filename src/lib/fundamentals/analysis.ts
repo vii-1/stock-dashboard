@@ -1,11 +1,23 @@
 import type { StatementField, StatementPeriod } from "./yahooFundamentals";
 
 // Pure, testable shaping of raw statement lines into Screener-style
-// tables, headline ratios, and rule-based pros/cons. All money is turned
-// into ₹ crores here (Yahoo reports rupees), matching how Indian
-// investors read statements.
+// tables, headline ratios, and rule-based pros/cons. Money is scaled to
+// how each market reads statements: ₹ crores for India, $ millions for
+// the US (Yahoo reports raw rupees / dollars).
 
-export type RowUnit = "cr" | "pct" | "rs" | "x";
+// "money" = scaled statement amount (crores / millions); "perShare" = EPS etc.
+export type RowUnit = "money" | "pct" | "perShare" | "x";
+
+export interface MoneyScale {
+  currency: "INR" | "USD";
+  divisor: number;
+  label: string; // "Cr" | "M"
+  longLabel: string; // "₹ Crores" | "$ Millions"
+  locale: string; // en-IN groups 1,00,000; en-US 100,000
+}
+
+export const SCALE_INR: MoneyScale = { currency: "INR", divisor: 1e7, label: "Cr", longLabel: "₹ Crores", locale: "en-IN" };
+export const SCALE_USD: MoneyScale = { currency: "USD", divisor: 1e6, label: "M", longLabel: "$ Millions", locale: "en-US" };
 
 export interface StatementRow {
   label: string;
@@ -18,9 +30,8 @@ export interface StatementRow {
 export interface StatementTable {
   periods: string[]; // display labels, oldest first ("Mar 2026")
   rows: StatementRow[];
+  locale: string; // number grouping for this market
 }
-
-const CRORE = 1e7;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export function periodLabel(date: string): string {
@@ -32,7 +43,7 @@ function v(p: StatementPeriod, f: StatementField): number | null {
   const x = p.values[f];
   return typeof x === "number" ? x : null;
 }
-const cr = (x: number | null) => (x == null ? null : x / CRORE);
+const scaler = (scale: MoneyScale) => (x: number | null) => (x == null ? null : x / scale.divisor);
 const sub = (a: number | null, b: number | null) => (a == null || b == null ? null : a - b);
 const pct = (num: number | null, den: number | null) => (num == null || den == null || den === 0 ? null : (num / den) * 100);
 
@@ -54,29 +65,31 @@ function operatingProfit(p: StatementPeriod): number | null {
 }
 
 /** Quarterly results / annual P&L in Screener's row order. */
-export function buildProfitLoss(periods: StatementPeriod[], opts: { annual: boolean }): StatementTable {
+export function buildProfitLoss(periods: StatementPeriod[], opts: { annual: boolean; scale?: MoneyScale }): StatementTable {
+  const scale = opts.scale ?? SCALE_INR;
+  const cr = scaler(scale);
   const rows: StatementRow[] = [
-    { label: "Sales", unit: "cr", values: periods.map((p) => cr(v(p, "TotalRevenue"))) },
+    { label: "Sales", unit: "money", values: periods.map((p) => cr(v(p, "TotalRevenue"))) },
     {
       label: "Expenses",
-      unit: "cr",
+      unit: "money",
       values: periods.map((p) => cr(sub(v(p, "TotalRevenue"), operatingProfit(p)))),
       hint: "Sales - Operating Profit",
     },
-    { label: "Operating Profit", unit: "cr", emphasis: true, values: periods.map((p) => cr(operatingProfit(p))) },
+    { label: "Operating Profit", unit: "money", emphasis: true, values: periods.map((p) => cr(operatingProfit(p))) },
     { label: "OPM %", unit: "pct", values: periods.map((p) => pct(operatingProfit(p), v(p, "TotalRevenue"))) },
     {
       label: "Other Income",
-      unit: "cr",
+      unit: "money",
       values: periods.map((p) => cr(otherIncome(p))),
       hint: "Includes exceptional / one-off items",
     },
-    { label: "Interest", unit: "cr", values: periods.map((p) => cr(v(p, "InterestExpense"))) },
-    { label: "Depreciation", unit: "cr", values: periods.map((p) => cr(v(p, "ReconciledDepreciation"))) },
-    { label: "Profit before tax", unit: "cr", emphasis: true, values: periods.map((p) => cr(v(p, "PretaxIncome"))) },
+    { label: "Interest", unit: "money", values: periods.map((p) => cr(v(p, "InterestExpense"))) },
+    { label: "Depreciation", unit: "money", values: periods.map((p) => cr(v(p, "ReconciledDepreciation"))) },
+    { label: "Profit before tax", unit: "money", emphasis: true, values: periods.map((p) => cr(v(p, "PretaxIncome"))) },
     { label: "Tax %", unit: "pct", values: periods.map((p) => pct(v(p, "TaxProvision"), v(p, "PretaxIncome"))) },
-    { label: "Net Profit", unit: "cr", emphasis: true, values: periods.map((p) => cr(v(p, "NetIncome"))) },
-    { label: "EPS in Rs", unit: "rs", values: periods.map((p) => v(p, "DilutedEPS")) },
+    { label: "Net Profit", unit: "money", emphasis: true, values: periods.map((p) => cr(v(p, "NetIncome"))) },
+    { label: "EPS in Rs", unit: "perShare", values: periods.map((p) => v(p, "DilutedEPS")) },
   ];
   if (opts.annual) {
     rows.push({
@@ -89,58 +102,60 @@ export function buildProfitLoss(periods: StatementPeriod[], opts: { annual: bool
       hint: "Dividends paid in the year / net profit",
     });
   }
-  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows) };
+  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows), locale: scale.locale };
 }
 
-export function buildBalanceSheet(periods: StatementPeriod[]): StatementTable {
+export function buildBalanceSheet(periods: StatementPeriod[], scale: MoneyScale = SCALE_INR): StatementTable {
+  const cr = scaler(scale);
   const rows: StatementRow[] = [
-    { label: "Equity Capital", unit: "cr", values: periods.map((p) => cr(v(p, "CommonStock"))) },
+    { label: "Equity Capital", unit: "money", values: periods.map((p) => cr(v(p, "CommonStock"))) },
     {
       label: "Reserves",
-      unit: "cr",
+      unit: "money",
       values: periods.map((p) => cr(sub(v(p, "StockholdersEquity"), v(p, "CommonStock")))),
     },
-    { label: "Borrowings", unit: "cr", values: periods.map((p) => cr(v(p, "TotalDebt"))) },
+    { label: "Borrowings", unit: "money", values: periods.map((p) => cr(v(p, "TotalDebt"))) },
     {
       label: "Other Liabilities",
-      unit: "cr",
+      unit: "money",
       values: periods.map((p) => cr(sub(v(p, "TotalLiabilitiesNetMinorityInterest"), v(p, "TotalDebt")))),
     },
-    { label: "Total Liabilities", unit: "cr", emphasis: true, values: periods.map((p) => cr(v(p, "TotalAssets"))), hint: "Equals total assets" },
-    { label: "Fixed Assets", unit: "cr", values: periods.map((p) => cr(v(p, "NetPPE"))) },
-    { label: "Cash & Equivalents", unit: "cr", values: periods.map((p) => cr(v(p, "CashAndCashEquivalents"))) },
+    { label: "Total Liabilities", unit: "money", emphasis: true, values: periods.map((p) => cr(v(p, "TotalAssets"))), hint: "Equals total assets" },
+    { label: "Fixed Assets", unit: "money", values: periods.map((p) => cr(v(p, "NetPPE"))) },
+    { label: "Cash & Equivalents", unit: "money", values: periods.map((p) => cr(v(p, "CashAndCashEquivalents"))) },
     {
       label: "Other Assets",
-      unit: "cr",
+      unit: "money",
       values: periods.map((p) => {
         const total = v(p, "TotalAssets");
         if (total == null) return null;
         return cr(total - (v(p, "NetPPE") ?? 0) - (v(p, "CashAndCashEquivalents") ?? 0));
       }),
     },
-    { label: "Total Assets", unit: "cr", emphasis: true, values: periods.map((p) => cr(v(p, "TotalAssets"))) },
+    { label: "Total Assets", unit: "money", emphasis: true, values: periods.map((p) => cr(v(p, "TotalAssets"))) },
   ];
-  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows) };
+  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows), locale: scale.locale };
 }
 
-export function buildCashFlow(periods: StatementPeriod[]): StatementTable {
+export function buildCashFlow(periods: StatementPeriod[], scale: MoneyScale = SCALE_INR): StatementTable {
+  const cr = scaler(scale);
   const rows: StatementRow[] = [
-    { label: "Cash from Operating Activity", unit: "cr", values: periods.map((p) => cr(v(p, "OperatingCashFlow"))) },
-    { label: "Cash from Investing Activity", unit: "cr", values: periods.map((p) => cr(v(p, "InvestingCashFlow"))) },
-    { label: "Cash from Financing Activity", unit: "cr", values: periods.map((p) => cr(v(p, "FinancingCashFlow"))) },
+    { label: "Cash from Operating Activity", unit: "money", values: periods.map((p) => cr(v(p, "OperatingCashFlow"))) },
+    { label: "Cash from Investing Activity", unit: "money", values: periods.map((p) => cr(v(p, "InvestingCashFlow"))) },
+    { label: "Cash from Financing Activity", unit: "money", values: periods.map((p) => cr(v(p, "FinancingCashFlow"))) },
     {
       label: "Net Cash Flow",
-      unit: "cr",
+      unit: "money",
       emphasis: true,
       values: periods.map((p) => {
         const parts = [v(p, "OperatingCashFlow"), v(p, "InvestingCashFlow"), v(p, "FinancingCashFlow")];
         return parts.some((x) => x == null) ? null : cr(parts.reduce((a, b) => a! + b!, 0));
       }),
     },
-    { label: "Capex", unit: "cr", values: periods.map((p) => cr(v(p, "CapitalExpenditure"))) },
-    { label: "Free Cash Flow", unit: "cr", emphasis: true, values: periods.map((p) => cr(v(p, "FreeCashFlow"))) },
+    { label: "Capex", unit: "money", values: periods.map((p) => cr(v(p, "CapitalExpenditure"))) },
+    { label: "Free Cash Flow", unit: "money", emphasis: true, values: periods.map((p) => cr(v(p, "FreeCashFlow"))) },
   ];
-  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows) };
+  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows), locale: scale.locale };
 }
 
 // EBIT for ROCE / interest cover: profit before tax + interest.
@@ -158,7 +173,7 @@ function averaged(periods: StatementPeriod[], i: number, f: (p: StatementPeriod)
 
 const capitalEmployed = (p: StatementPeriod) => sub(v(p, "TotalAssets"), v(p, "CurrentLiabilities"));
 
-export function buildRatios(periods: StatementPeriod[]): StatementTable {
+export function buildRatios(periods: StatementPeriod[], scale: MoneyScale = SCALE_INR): StatementTable {
   const growth = (f: StatementField) =>
     periods.map((p, i) => (i === 0 ? null : pct(sub(v(p, f), v(periods[i - 1], f)), Math.abs(v(periods[i - 1], f) ?? NaN))));
   const rows: StatementRow[] = [
@@ -198,7 +213,7 @@ export function buildRatios(periods: StatementPeriod[]): StatementTable {
       hint: "EBIT / interest",
     },
   ];
-  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows) };
+  return { periods: periods.map((p) => periodLabel(p.date)), rows: dropEmptyRows(rows), locale: scale.locale };
 }
 
 function dropEmptyRows(rows: StatementRow[]): StatementRow[] {
@@ -231,8 +246,12 @@ export function buildProsCons(input: {
   quarterly: StatementPeriod[];
   priceToBook: number | null;
   dividendYield: number | null; // fraction
+  scale?: MoneyScale;
 }): ProsCons {
   const { annual, quarterly } = input;
+  const scale = input.scale ?? SCALE_INR;
+  const money = (raw: number) =>
+    `${scale.currency === "INR" ? "₹" : "$"}${Math.round(raw / scale.divisor).toLocaleString(scale.locale)} ${scale.label}`;
   const pros: string[] = [];
   const cons: string[] = [];
   const last = annual[annual.length - 1];
@@ -262,7 +281,7 @@ export function buildProsCons(input: {
     const other = otherIncome(last);
     const pbt = v(last, "PretaxIncome");
     if (other != null && pbt && pbt > 0 && other / pbt > 0.25) {
-      cons.push(`Other income is ${fmt((other / pbt) * 100, 0)}% of profit before tax (₹${Math.round(other / CRORE).toLocaleString("en-IN")} Cr).`);
+      cons.push(`Other income is ${fmt((other / pbt) * 100, 0)}% of profit before tax (${money(other)}).`);
     }
 
     const paid = v(last, "CashDividendsPaid");

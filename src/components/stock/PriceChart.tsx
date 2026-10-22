@@ -9,6 +9,13 @@ const H = 260;
 const PAD = { top: 12, right: 56, bottom: 24, left: 8 };
 const VOL_H = 48; // volume band height at the bottom of the plot
 
+// Enough decimals that small prices (a $0.20 coin) don't round to 0.
+function fmtPrice(x: number, locale: string, extra = 0) {
+  const abs = Math.abs(x);
+  const digits = abs >= 100 ? 0 : abs >= 1 ? 2 : abs >= 0.01 ? 4 : 6;
+  return x.toLocaleString(locale, { minimumFractionDigits: Math.min(digits + extra, 6), maximumFractionDigits: Math.min(digits + extra, 6) });
+}
+
 function fmtDate(t: number, range: ChartRange) {
   const d = new Date(t * 1000);
   return d.toLocaleDateString("en-IN", range === "1M" || range === "6M" ? { day: "numeric", month: "short" } : { month: "short", year: "2-digit" });
@@ -20,7 +27,17 @@ function fmtDate(t: number, range: ChartRange) {
  * One series, so no legend - the card title names it; the axis on the
  * right carries price.
  */
-export default function PriceChart({ symbol }: { symbol: string }) {
+export default function PriceChart({
+  endpoint,
+  label,
+  currency = "INR",
+}: {
+  endpoint: string; // e.g. /api/fundamentals/stock/AAPL/chart - range appended
+  label: string;
+  currency?: "INR" | "USD";
+}) {
+  const locale = currency === "INR" ? "en-IN" : "en-US";
+  const symbolChar = currency === "INR" ? "₹" : "$";
   const [range, setRange] = useState<ChartRange>("1Y");
   const [data, setData] = useState<ChartPoint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +48,7 @@ export default function PriceChart({ symbol }: { symbol: string }) {
     let cancelled = false;
     setData(null);
     setError(null);
-    fetch(`/api/stocks/india/${encodeURIComponent(symbol)}/chart?range=${range}`)
+    fetch(`${endpoint}?range=${range}`)
       .then(async (res) => {
         const body = await res.json();
         if (!res.ok) throw new Error(body.error ?? "Failed to load chart");
@@ -41,7 +58,7 @@ export default function PriceChart({ symbol }: { symbol: string }) {
     return () => {
       cancelled = true;
     };
-  }, [symbol, range]);
+  }, [endpoint, range]);
 
   const geom = useMemo(() => {
     if (!data || data.length < 2) return null;
@@ -115,13 +132,13 @@ export default function PriceChart({ symbol }: { symbol: string }) {
             onPointerMove={onMove}
             onPointerLeave={() => setHover(null)}
             role="img"
-            aria-label={`${symbol} price, ${range}`}
+            aria-label={`${label} price, ${range}`}
           >
             {geom.ticks.map((t) => (
               <g key={t}>
                 <line x1={PAD.left} x2={W - PAD.right} y1={geom.y(t)} y2={geom.y(t)} className="stroke-slate-200 dark:stroke-slate-800" strokeWidth={1} />
                 <text x={W - PAD.right + 6} y={geom.y(t) + 4} className="fill-slate-400 text-[11px]">
-                  {Math.round(t).toLocaleString("en-IN")}
+                  {fmtPrice(t, locale)}
                 </text>
               </g>
             ))}
@@ -165,9 +182,10 @@ export default function PriceChart({ symbol }: { symbol: string }) {
               {new Date(hp.t * 1000).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
             </div>
             <div className="mt-0.5 font-semibold tabular-nums text-slate-900 dark:text-white">
-              ₹{hp.close.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {symbolChar}
+              {fmtPrice(hp.close, locale, 2)}
             </div>
-            <div className="tabular-nums text-slate-500 dark:text-slate-400">Vol {hp.volume.toLocaleString("en-IN")}</div>
+            <div className="tabular-nums text-slate-500 dark:text-slate-400">Vol {Math.round(hp.volume).toLocaleString(locale)}</div>
           </div>
         )}
       </div>

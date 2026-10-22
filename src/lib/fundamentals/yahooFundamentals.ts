@@ -1,6 +1,6 @@
 import { withCache } from "@/lib/cache/ttlCache";
 
-// Fundamentals for Indian stocks, from two Yahoo endpoints:
+// Fundamentals for NSE/BSE and US stocks, from two Yahoo endpoints:
 //
 //  - fundamentals-timeseries: annual + quarterly statement lines (P&L,
 //    balance sheet, cash flow). Public, no auth.
@@ -41,12 +41,13 @@ async function getYahooAuth(force = false): Promise<{ cookie: string; crumb: str
 
 export interface CompanySummary {
   name: string | null;
-  marketCap: number | null; // ₹
+  exchange: string | null; // Yahoo exchange name, e.g. "NasdaqGS", "NYSE"
+  marketCap: number | null; // in the listing currency (₹ / $)
   trailingPE: number | null;
   dividendYield: number | null; // fraction, 0.0058 = 0.58%
   fiftyTwoWeekHigh: number | null;
   fiftyTwoWeekLow: number | null;
-  bookValue: number | null; // ₹ per share
+  bookValue: number | null; // per share, listing currency
   priceToBook: number | null;
   debtToEquity: number | null; // Yahoo reports as a percentage (95.4 = 0.95x)
   sector: string | null;
@@ -78,6 +79,7 @@ async function fetchQuoteSummary(symbol: string): Promise<CompanySummary> {
     const p = r.assetProfile ?? {};
     return {
       name: r.price?.longName ?? r.price?.shortName ?? null,
+      exchange: r.price?.exchangeName ?? null,
       marketCap: raw(r.summaryDetail?.marketCap) ?? raw(r.price?.marketCap),
       trailingPE: raw(r.summaryDetail?.trailingPE),
       dividendYield: raw(r.summaryDetail?.dividendYield),

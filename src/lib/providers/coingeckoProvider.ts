@@ -116,3 +116,27 @@ export const coingeckoProvider: MarketDataProvider = {
     }));
   },
 };
+
+/**
+ * Turn whatever a user typed for a coin - its CoinGecko id ("ethereum"),
+ * ticker ("ETH", "eth") or name ("Ethereum") - into the CoinGecko id every
+ * other call needs. Tickers aren't unique (bridged/wrapped copies share
+ * them), so an exact ticker match goes to the highest market-cap coin.
+ * Returns null when nothing matches exactly - better to ask the user than
+ * to guess at a fuzzy match.
+ */
+export async function resolveCoinId(input: string): Promise<{ id: string; name: string } | null> {
+  const query = input.trim();
+  if (!query) return null;
+  const result: { coins: { id: string; name: string; symbol: string; market_cap_rank: number | null }[] } = await cgFetch(
+    `/search?query=${encodeURIComponent(query)}`
+  );
+  const lower = query.toLowerCase();
+  const byRank = (a: { market_cap_rank: number | null }, b: { market_cap_rank: number | null }) =>
+    (a.market_cap_rank ?? Infinity) - (b.market_cap_rank ?? Infinity);
+  const match =
+    result.coins.find((c) => c.id === lower) ??
+    result.coins.filter((c) => c.symbol.toLowerCase() === lower).sort(byRank)[0] ??
+    result.coins.filter((c) => c.name.toLowerCase() === lower).sort(byRank)[0];
+  return match ? { id: match.id, name: match.name } : null;
+}
